@@ -445,7 +445,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           await site.liveSite.getPlayQualites(detail: detail.value!);
 
       if (playQualites.isEmpty) {
-        SmartDialog.showToast("无法读取播放清晰度");
+        SmartDialog.showToast("无法读取播放清晰度，正在自动重连");
+        _scheduleReconnectAfterUrlFailure();
         return;
       }
       qualites.value = playQualites;
@@ -465,7 +466,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       getPlayUrl();
     } catch (e) {
       Log.logPrint(e);
-      SmartDialog.showToast("无法读取播放清晰度");
+      SmartDialog.showToast("无法读取播放清晰度，正在自动重连");
+      _scheduleReconnectAfterUrlFailure();
     }
   }
 
@@ -488,19 +490,38 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentQualityInfo.value = qualites[currentQuality].quality;
     currentLineInfo.value = "";
     currentLineIndex = -1;
-    var playUrl = await site.liveSite
-        .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
-    if (playUrl.urls.isEmpty) {
-      SmartDialog.showToast("无法读取播放地址");
+    try {
+      var playUrl = await site.liveSite.getPlayUrls(
+          detail: detail.value!, quality: qualites[currentQuality]);
+      if (playUrl.urls.isEmpty) {
+        SmartDialog.showToast("无法读取播放地址，正在自动重连");
+        _scheduleReconnectAfterUrlFailure();
+        return;
+      }
+      playUrls.value = playUrl.urls;
+      playHeaders = playUrl.headers;
+      currentLineIndex = 0;
+      currentLineInfo.value = "线路${currentLineIndex + 1}";
+      //重置错误次数
+      mediaErrorRetryCount = 0;
+      initPlaylist();
+    } catch (e) {
+      Log.logPrint(e);
+      SmartDialog.showToast("获取播放地址失败，正在自动重连");
+      _scheduleReconnectAfterUrlFailure();
+    }
+  }
+
+  /// 取流失败（清晰度/地址为空或异常）时，接入与播放中断相同的自动重连机制
+  /// - 重连会重新获取房间信息和全新的流地址/令牌，可自动恢复
+  /// - refreshStreamOnce 内部直接调用站点方法，不会递归触发本方法
+  void _scheduleReconnectAfterUrlFailure() {
+    if (reconnecting.value || loadError.value || _reconnectDisposed) {
       return;
     }
-    playUrls.value = playUrl.urls;
-    playHeaders = playUrl.headers;
-    currentLineIndex = 0;
-    currentLineInfo.value = "线路${currentLineIndex + 1}";
-    //重置错误次数
-    mediaErrorRetryCount = 0;
-    initPlaylist();
+    reconnecting.value = true;
+    addSysMsg("获取直播流失败，正在自动重连");
+    refreshStreamLoop();
   }
 
   void changePlayLine(int index) {

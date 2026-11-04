@@ -26,7 +26,7 @@ class HuyaSite implements LiveSite {
   };
 
   final BaseTarsHttp tupClient =
-  BaseTarsHttp("http://wup.huya.com", "liveui", headers: requestHeaders);
+      BaseTarsHttp("https://wup.huya.com", "liveui", headers: requestHeaders);
 
   String? playUserAgent;
   @override
@@ -212,10 +212,21 @@ class HuyaSite implements LiveSite {
       {required LiveRoomDetail detail,
       required LivePlayQuality quality}) async {
     var ls = <String>[];
+    // 单条线路的token/签名失败只影响该CDN，不放弃其余线路（参考pure_live）
     for (var element in quality.data["urls"]) {
       var line = element as HuyaLineModel;
-      var url = await getPlayUrl(line, quality.data["bitRate"]);
-      ls.add(url);
+      var url = '';
+      try {
+        url = await getPlayUrl(line, quality.data["bitRate"]);
+      } catch (e) {
+        CoreLog.error(e);
+      }
+      if (url.isNotEmpty && !ls.contains(url)) {
+        ls.add(url);
+      }
+    }
+    if (ls.isEmpty) {
+      throw Exception("虎牙所有线路的播放地址获取失败，请稍后重试");
     }
     // 最新UA需要额外验证，此方法暂时弃用
     // var ua = await getHuYaUA();
@@ -296,11 +307,33 @@ class HuyaSite implements LiveSite {
     return antiCodeRes.entries.map((e) => '${e.key}=${e.value}').join('&');
   }
 
+  /// 随机生成虎牙SDK的UA（参考pure_live）
+  /// 固定的 pc_exe UA 更易被虎牙风控识别，随机平台/子版本组合降低拒绝率
+  static String _requestHuyaUA() {
+    const platforms = [
+      (name: 'adr', version: '13.1.0', hasApiLevel: true),
+      (name: 'ios', version: '13.1.0', hasApiLevel: false),
+      (name: 'huya_nftv', version: '2.6.10', hasApiLevel: true),
+      (name: 'pc_exe', version: '7000000', hasApiLevel: false),
+    ];
+    var platform = platforms[Random().nextInt(platforms.length)];
+    var version = platform.version;
+    if (platform.name == 'adr' || platform.name == 'huya_nftv') {
+      version = '$version.${Random().nextInt(2000) + 3000}';
+    }
+    var ua = '${platform.name}&$version&official';
+    if (platform.hasApiLevel) {
+      ua = '$ua&${Random().nextInt(9) + 28}';
+    }
+    return ua;
+  }
+
   /// return sFlvToken
   Future<String> getCndTokenInfoEx(String stream) async {
     var func = "getCdnTokenInfoEx";
     var tid = HuyaUserId();
-    tid.sHuYaUA = "pc_exe&7060000&official";
+    // 随机SDK UA：固定 pc_exe&7060000&official 已被虎牙风控重点识别
+    tid.sHuYaUA = _requestHuyaUA();
     var tReq = GetCdnTokenExReq();
     tReq.tId = tid;
     tReq.sStreamName = stream;
